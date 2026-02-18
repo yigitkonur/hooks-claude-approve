@@ -79,7 +79,7 @@ The installer prompts for both, tests connectivity, and saves them to `~/.claude
 
 Each plan becomes a card subpage under your chosen document:
 
-- **Title:** `[/your/project/path] - [14:30 - 18-02-2026]`
+- **Title:** `[~/your/project/path] - [14:30 - 18-02-2026]`
 - **Content:** Full plan markdown — headings, tables, code blocks, lists all rendered natively by Craft
 
 ## Alternative install

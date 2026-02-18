@@ -34,11 +34,12 @@ if [ -n "$CRAFT_API_URL" ] && [ -n "$CRAFT_PAGE_ID" ]; then
       PAYLOAD=$(jq \
         --arg ts "$TIMESTAMP" \
         --arg pageId "$CRAFT_PAGE_ID" \
+        --arg home "$HOME" \
         '{
           blocks: [{
             type: "page",
             textStyle: "card",
-            markdown: ("[\(.cwd)] - [" + $ts + "]"),
+            markdown: ("[" + (.cwd | sub($home; "~")) + "] - [" + $ts + "]"),
             content: [{
               type: "text",
               markdown: .tool_input.plan
