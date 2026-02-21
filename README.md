@@ -1,90 +1,36 @@
-# claude-plan-hook
-
-Skip the "Ready to code?" prompt. Auto-approve Claude Code plans and optionally archive every plan to [Craft.do](https://craft.do).
-
-## Quick install
+auto-approves Claude Code's "ready to code?" plan dialog so you stop clicking a button 50 times a day. optionally archives every plan to Craft.do as a timestamped card. pure bash, no dependencies beyond `jq`.
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/yigitkonur/hooks-claude-approve/main/install.sh)
 ```
 
-That's it. The installer will ask you to pick a mode:
-
-```
-  claude-plan-hook
-  Auto-approve Claude Code plans. Archive them to Craft.
-
-Choose a mode:
-
-  1  Auto-approve only
-     Plans are approved instantly. No external services.
-
-  2  Auto-approve + publish to Craft.do
-     Plans are approved and archived as subpages in Craft.
-
-  3  Craft.do publish only (no auto-approve)
-     Plans are archived in Craft but you still approve manually.
-
-> Enter mode [1/2/3]:
-```
-
-Restart Claude Code after install. To switch modes, run the installer again.
+[![bash](https://img.shields.io/badge/bash-pure_shell-93450a.svg?style=flat-square)](https://www.gnu.org/software/bash/)
+[![platform](https://img.shields.io/badge/platform-macOS_|_Linux-93450a.svg?style=flat-square)](#)
+[![license](https://img.shields.io/badge/license-MIT-grey.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
 ---
 
-## How it works
+## the problem
 
-```
-  You give Claude a task in plan mode
-           |
-  Claude writes the plan, calls ExitPlanMode
-           |
-  UI shows "Ready to code?" dialog
-           |
-  PermissionRequest hook fires  <--- this is the hook
-           |
-     +-----+-----+
-     |             |
-  approve       push to
-  instantly     Craft.do
-     |          (background)
-     v               |
-  Claude              v
-  implements    plan archived
-  the plan      as a subpage
+Claude Code has a plan mode. when Claude finishes writing a plan and calls `ExitPlanMode`, it fires a `PermissionRequest` event and waits for you to click approve. every single time. this hooks into that event and returns `{"behavior":"allow"}` immediately.
+
+## three modes
+
+the installer asks you to pick one:
+
+| mode | what it does |
+|:---|:---|
+| **1 — auto-approve only** | approves every plan instantly. no network calls, no logging. install and forget |
+| **2 — auto-approve + Craft** | approves instantly and archives the plan to a Craft.do page in the background |
+| **3 — Craft only** | archives to Craft but still shows the manual approval dialog |
+
+## install
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/yigitkonur/hooks-claude-approve/main/install.sh)
 ```
 
-The plan approval dialog is a `PermissionRequest` event for the `ExitPlanMode` tool. This hook intercepts it and returns `{ behavior: "allow" }` so Claude continues without waiting.
-
-> **Note:** Many implementations try hooking `Stop` and grepping the transcript. That approach doesn't work because the approval dialog fires *before* Claude stops — it's waiting for user input, not stopping.
-
-## Modes
-
-| Mode | Auto-approve | Craft.do | Use case |
-|------|:---:|:---:|---|
-| **1** Approve only | Yes | No | Just skip the approval dialog |
-| **2** Approve + Craft | Yes | Yes | Skip approval and archive every plan |
-| **3** Craft only | No | Yes | Archive plans but still approve manually |
-
-## Craft.do setup
-
-Modes 2 and 3 need two things from you:
-
-1. **Craft API URL** — Go to Craft Settings > API, create a connection, copy the endpoint. Looks like `https://connect.craft.do/links/[your-key-id]/api/v1`
-2. **Parent page ID** — The UUID of the Craft page where plans will be nested as subpages. Find it in the page URL or via the API.
-
-The installer prompts for both, tests connectivity, and saves them to `~/.claude/hooks/craft-config.env` (permissions `600`). Edit that file anytime to update credentials.
-
-### What gets pushed
-
-Each plan becomes a card subpage under your chosen document:
-
-- **Title:** `[~/your/project/path] - [14:30 - 18-02-2026]`
-- **Content:** Full plan markdown — headings, tables, code blocks, lists all rendered natively by Craft
-
-## Alternative install
-
-Clone first, then run:
+or clone first:
 
 ```bash
 git clone https://github.com/yigitkonur/hooks-claude-approve.git /tmp/claude-plan-hook \
@@ -92,54 +38,73 @@ git clone https://github.com/yigitkonur/hooks-claude-approve.git /tmp/claude-pla
   && rm -rf /tmp/claude-plan-hook
 ```
 
-## Uninstall
+requires `jq` (`brew install jq` / `apt install jq`). installer is idempotent — re-run to switch modes.
+
+## how it works
+
+hooks into Claude Code's `PermissionRequest` event with matcher `ExitPlanMode`. the hook script:
+
+1. consumes stdin (required by hook protocol)
+2. (modes 2 & 3) parses `.tool_input.plan` from the JSON payload
+3. (modes 2 & 3) fires the Craft API call in a background subshell — zero blocking
+4. (modes 1 & 2) prints the allow decision to stdout
+5. Claude Code reads stdout, skips the dialog, starts implementing
+
+the Craft publish runs in `( ... ) &` so approval latency is zero even on slow connections. all JSON is built inside `jq`, never via shell string concatenation — handles newlines, quotes, and unicode in plan text correctly.
+
+## Craft setup
+
+modes 2 and 3 need a Craft.do API URL and page ID. the installer prompts for both and writes them to `~/.claude/hooks/craft-config.env` (permissions `600`). edit that file directly to update credentials without re-running the installer.
+
+each plan gets archived as a card-style subpage:
+
+```
+title:   [~/project/path] - [14:32 - 20-02-2026]
+content: full plan markdown
+```
+
+the installer posts a connectivity test block during setup to verify credentials work.
+
+## what gets installed
+
+```
+~/.claude/hooks/claude-plan-hook.sh    — the active hook script (one of three modes)
+~/.claude/hooks/craft-config.env       — Craft credentials (modes 2 & 3 only)
+~/.claude/settings.json                — hook registration merged via jq
+```
+
+the installer merges into `settings.json` without destroying existing hooks or settings.
+
+## project structure
+
+```
+hooks-claude-approve/
+  install.sh                — interactive installer
+  uninstall.sh              — uninstaller
+  hooks/
+    auto-approve-plan.sh    — mode 1: auto-approve only
+    auto-approve-craft.sh   — mode 2: auto-approve + Craft archive
+    craft-only.sh           — mode 3: Craft archive, manual approve
+```
+
+## uninstall
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/yigitkonur/hooks-claude-approve/main/uninstall.sh)
 ```
 
-Or manually:
+or manually:
 
 ```bash
 rm ~/.claude/hooks/claude-plan-hook.sh
-# Then remove the PermissionRequest/ExitPlanMode entry from ~/.claude/settings.json
+rm ~/.claude/hooks/craft-config.env
+# then remove the ExitPlanMode entry from ~/.claude/settings.json
 ```
 
-## What the installer does
+## why not hook the Stop event?
 
-- Checks for `jq` (required) and `curl` (Craft modes)
-- Copies the right hook script to `~/.claude/hooks/claude-plan-hook.sh`
-- Merges a `PermissionRequest` hook with `ExitPlanMode` matcher into `~/.claude/settings.json`
-- Removes old broken `Stop` hook entries from previous versions
-- For Craft modes: prompts for credentials, tests the API, saves to `~/.claude/hooks/craft-config.env`
-- Re-install safe: switching modes cleanly replaces the hook and settings entry
+earlier approaches tried hooking `Stop` and grepping the conversation transcript. that doesn't work — the approval dialog fires while Claude is paused waiting for input, not in a stopped state. the correct hook point is `PermissionRequest` with matcher `ExitPlanMode`.
 
-## Requirements
-
-- macOS or Linux
-- [jq](https://jqlang.github.io/jq/) — `brew install jq`
-- `curl` (for Craft modes and remote install)
-- Claude Code with hooks support
-
-## Troubleshooting
-
-**Plans aren't auto-approving:**
-- Restart Claude Code after installing (settings load at session start)
-- Verify: `jq '.hooks.PermissionRequest' ~/.claude/settings.json`
-- Verify: `ls -la ~/.claude/hooks/claude-plan-hook.sh`
-
-**Plans aren't appearing in Craft:**
-- Check credentials: `cat ~/.claude/hooks/craft-config.env`
-- Test manually:
-  ```bash
-  curl -s -X POST "[your-api-url]/blocks" \
-    -H "Content-Type: application/json" \
-    -d '{"blocks":[{"type":"text","markdown":"test"}],"position":{"position":"end","pageId":"[your-page-id]"}}'
-  ```
-
-**Upgrading from the old Stop hook version:**
-The installer automatically removes old `Stop` hook entries. No manual cleanup needed.
-
-## License
+## license
 
 MIT
